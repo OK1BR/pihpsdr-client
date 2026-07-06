@@ -72,18 +72,39 @@ static double dbm_lerp(const float *dbm, int n, double colf) {
   return (1.0 - t) * dbm[c0] + t * dbm[c0 + 1];
 }
 
+/*
+ * dBm to plot for output pixel x. When there are more data columns than pixels
+ * (n > w, e.g. 4096 columns in a 1200 px window) take the MAX over the columns
+ * that fall in this pixel so signal peaks are never skipped; otherwise
+ * interpolate for a smooth upscaled curve.
+ */
+static double column_value(const float *dbm, int n, int x, int w) {
+  double c0 = (double)x * n / w;
+  double c1 = (double)(x + 1) * n / w;
+  if (c1 - c0 >= 1.0) {
+    int a = (int)c0, b = (int)c1;
+    if (a < 0) a = 0;
+    if (b > n) b = n;
+    double m = dbm[a < n ? a : n - 1];
+    for (int k = a + 1; k < b; k++) {
+      if (dbm[k] > m) m = dbm[k];
+    }
+    return m;
+  }
+  return dbm_lerp(dbm, n, c0);
+}
+
 /* `dbm` is a length-n array of dBm values (already smoothed by the caller). */
 static void draw_spectrum(cairo_t *cr, const float *dbm, int n, int w, int h) {
   if (n < 2) {
     return;
   }
-  const double sx = (double)(n - 1) / (w - 1);
 
   /* Filled area under the trace. */
   cairo_new_path(cr);
   cairo_move_to(cr, 0, h);
   for (int x = 0; x < w; x++) {
-    cairo_line_to(cr, x, dbm_to_y(dbm_lerp(dbm, n, x * sx), h));
+    cairo_line_to(cr, x, dbm_to_y(column_value(dbm, n, x, w), h));
   }
   cairo_line_to(cr, w, h);
   cairo_close_path(cr);
@@ -98,7 +119,7 @@ static void draw_spectrum(cairo_t *cr, const float *dbm, int n, int w, int h) {
   /* Bright trace on top. */
   cairo_new_path(cr);
   for (int x = 0; x < w; x++) {
-    double y = dbm_to_y(dbm_lerp(dbm, n, x * sx), h);
+    double y = dbm_to_y(column_value(dbm, n, x, w), h);
     if (x == 0) {
       cairo_move_to(cr, x, y);
     } else {

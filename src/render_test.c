@@ -33,6 +33,10 @@ int main(int argc, char **argv) {
   const int W = 1200, H = 480;
 
   Client *c = client_new(host, port, pwd);
+  const char *colenv = getenv("PIHPSDR_COLUMNS");
+  if (colenv && atoi(colenv) > 0) {
+    client_set_columns(c, atoi(colenv));
+  }
   int rc = client_connect(c);
 
   ClientFrame f;

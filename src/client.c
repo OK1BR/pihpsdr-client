@@ -32,6 +32,10 @@ struct Client {
   GMutex   send_lock;     /* serialises TCP sends across threads */
   ClientFrame latest;
   volatile gboolean running;
+
+  int      columns;         /* requested CMD_SCREEN width, 0 = native */
+  int      native_width;    /* width of the first frame (server's own) */
+  int      applied_columns; /* last width we requested via CMD_SCREEN  */
 };
 
 /* All TCP sends funnel through here (multiple threads send). */
@@ -150,6 +154,18 @@ static int cl_send_rxspectrum(Client *c, int id, int state) {
   h.b1 = id;
   h.b2 = state;
   h.s1 = 0;
+  h.s2 = 0;
+  return client_send(c, &h, sizeof(h));
+}
+
+/* Request a panadapter width (columns) from the server. */
+static int cl_send_screen(Client *c, int hstack, int width) {
+  HEADER h;
+  SYNC(h.sync);
+  h.data_type = to_16(CMD_SCREEN);
+  h.b1 = hstack;
+  h.b2 = 0;
+  h.s1 = to_16(width);
   h.s2 = 0;
   return client_send(c, &h, sizeof(h));
 }
@@ -275,6 +291,17 @@ static gpointer rx_thread(gpointer data) {
     if (decode_spectrum(dg, (int)n, &tmp) != 0) {
       continue;
     }
+
+    /* The first frame is at the server's native width; remember it so we can
+     * restore it on stop, then apply the requested column count (if any). */
+    if (c->native_width == 0) {
+      c->native_width = tmp.width;
+    }
+    if (c->columns > 0 && c->applied_columns != c->columns) {
+      cl_send_screen(c, 0, c->columns);
+      c->applied_columns = c->columns;
+    }
+
     g_mutex_lock(&c->lock);
     uint64_t seq = c->latest.seq + 1;
     memcpy(&c->latest, &tmp, sizeof(ClientFrame));
@@ -343,26 +370,44 @@ void client_vfo_move(Client *c, int id, long long hz) {
   client_send(c, &cmd, sizeof(cmd));
 }
 
+void client_set_columns(Client *c, int columns) {
+  if (columns > 0) {
+    if (columns < 64) {
+      columns = 64;
+    }
+    if (columns > SPECTRUM_DATA_SIZE) {
+      columns = SPECTRUM_DATA_SIZE;
+    }
+  }
+  c->columns = columns;
+  /* If already streaming, the rx thread applies it on the next frame. */
+}
+
 void client_stop(Client *c) {
   if (!c->running && c->tcp < 0) {
     return;
   }
   c->running = FALSE;
 
-  /* Best-effort "stop streaming" before we tear the socket down. */
+  /* Join the UDP thread first so it stops sending pings / screen requests. */
+  if (c->rx_thread_h) {
+    g_thread_join(c->rx_thread_h);
+    c->rx_thread_h = NULL;
+  }
+
   if (c->tcp >= 0) {
-    cl_send_rxspectrum(c, 0, 0);
-    /* Unblock the TCP reader thread's blocking recv(). */
-    shutdown(c->tcp, SHUT_RDWR);
+    /* Restore the operator's native display width if we changed it. */
+    if (c->applied_columns > 0 && c->native_width > 0 &&
+        c->applied_columns != c->native_width) {
+      cl_send_screen(c, 0, c->native_width);
+    }
+    cl_send_rxspectrum(c, 0, 0);       /* stop streaming to us */
+    shutdown(c->tcp, SHUT_RDWR);        /* unblock the TCP reader */
   }
 
   if (c->tcp_thread_h) {
     g_thread_join(c->tcp_thread_h);
     c->tcp_thread_h = NULL;
-  }
-  if (c->rx_thread_h) {
-    g_thread_join(c->rx_thread_h);
-    c->rx_thread_h = NULL;
   }
 
   if (c->tcp >= 0) {

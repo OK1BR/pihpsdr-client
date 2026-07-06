@@ -104,6 +104,14 @@ int main(int argc, char **argv) {
   memset(&app, 0, sizeof(app));
   app.client = client_new(host, port, pwd);
 
+  /* Optional: request a wider panadapter (up to 4096) via CMD_SCREEN.
+   * NB: reconfigures the shared server display; native width is restored on exit. */
+  const char *colenv = getenv("PIHPSDR_COLUMNS");
+  if (colenv && atoi(colenv) > 0) {
+    client_set_columns(app.client, atoi(colenv));
+    printf("Requesting %d panadapter columns.\n", atoi(colenv));
+  }
+
   app.conn_err = client_connect(app.client);
   if (app.conn_err == CLIENT_OK) {
     app.connected = 1;

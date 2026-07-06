@@ -58,6 +58,15 @@ int client_latest(Client *c, ClientFrame *out, uint64_t *last_seq);
 /* Relative VFO tune by hz (CMD_MOVE). Server convention: dial -= hz. */
 void client_vfo_move(Client *c, int id, long long hz);
 
+/*
+ * Request `columns` panadapter columns (64..4096) via CMD_SCREEN. 0 leaves the
+ * server's native width untouched. NB: this reconfigures the *shared* server
+ * display width (see [[dont-clobber-server-config]]). The client remembers the
+ * native width from the first frame and restores it on client_stop().
+ * May be called before or after client_connect().
+ */
+void client_set_columns(Client *c, int columns);
+
 /* Stop streaming, join the thread, close sockets. Safe to call once. */
 void client_stop(Client *c);
 void client_free(Client *c);
