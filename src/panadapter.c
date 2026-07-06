@@ -59,19 +59,31 @@ static void draw_grid(cairo_t *cr, int w, int h) {
   }
 }
 
-static void draw_spectrum(cairo_t *cr, const ClientFrame *f, int w, int h) {
-  int n = f->width;
+/* Linearly interpolated dBm at fractional column position for smooth scaling. */
+static double dbm_lerp(const float *dbm, int n, double colf) {
+  if (colf <= 0) {
+    return dbm[0];
+  }
+  if (colf >= n - 1) {
+    return dbm[n - 1];
+  }
+  int c0 = (int)colf;
+  double t = colf - c0;
+  return (1.0 - t) * dbm[c0] + t * dbm[c0 + 1];
+}
+
+/* `dbm` is a length-n array of dBm values (already smoothed by the caller). */
+static void draw_spectrum(cairo_t *cr, const float *dbm, int n, int w, int h) {
   if (n < 2) {
     return;
   }
+  const double sx = (double)(n - 1) / (w - 1);
 
   /* Filled area under the trace. */
   cairo_new_path(cr);
   cairo_move_to(cr, 0, h);
   for (int x = 0; x < w; x++) {
-    int col = (int)((long)x * (n - 1) / (w - 1));
-    double dbm = (double)f->dbm[col] - 200.0;
-    cairo_line_to(cr, x, dbm_to_y(dbm, h));
+    cairo_line_to(cr, x, dbm_to_y(dbm_lerp(dbm, n, x * sx), h));
   }
   cairo_line_to(cr, w, h);
   cairo_close_path(cr);
@@ -86,9 +98,7 @@ static void draw_spectrum(cairo_t *cr, const ClientFrame *f, int w, int h) {
   /* Bright trace on top. */
   cairo_new_path(cr);
   for (int x = 0; x < w; x++) {
-    int col = (int)((long)x * (n - 1) / (w - 1));
-    double dbm = (double)f->dbm[col] - 200.0;
-    double y = dbm_to_y(dbm, h);
+    double y = dbm_to_y(dbm_lerp(dbm, n, x * sx), h);
     if (x == 0) {
       cairo_move_to(cr, x, y);
     } else {
@@ -97,6 +107,7 @@ static void draw_spectrum(cairo_t *cr, const ClientFrame *f, int w, int h) {
   }
   cairo_set_source_rgba(cr, 0.45, 0.90, 0.98, 0.95);
   cairo_set_line_width(cr, 1.3);
+  cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
   cairo_stroke(cr);
 }
 
@@ -148,7 +159,8 @@ static void draw_status(cairo_t *cr, const char *msg, int w, int h) {
 }
 
 void panadapter_draw(cairo_t *cr, int w, int h,
-                     const ClientFrame *frame, const char *status) {
+                     const ClientFrame *frame, const float *dbm,
+                     const char *status) {
   /* Background. */
   cairo_set_source_rgb(cr, 0.039, 0.055, 0.070);
   cairo_paint(cr);
@@ -160,7 +172,17 @@ void panadapter_draw(cairo_t *cr, int w, int h,
     return;
   }
 
-  draw_spectrum(cr, frame, w, h);
+  /* Use the caller's smoothed dBm if provided; else derive raw dBm from bytes. */
+  const float *vals = dbm;
+  float tmp[SPECTRUM_DATA_SIZE];
+  if (!vals) {
+    for (int i = 0; i < frame->width; i++) {
+      tmp[i] = (float)frame->dbm[i] - 200.0f;
+    }
+    vals = tmp;
+  }
+
+  draw_spectrum(cr, vals, frame->width, w, h);
   draw_center_line(cr, w, h);
   draw_readouts(cr, frame, w);
 }

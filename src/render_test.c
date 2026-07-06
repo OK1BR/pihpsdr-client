@@ -42,28 +42,43 @@ int main(int argc, char **argv) {
   if (rc != CLIENT_OK) {
     status = client_strerror(rc);
     fprintf(stderr, "connect: %s\n", status);
-  } else {
+  }
+
+  /* Accumulate a time-average over several frames (same EMA as the GUI) so the
+   * PNG reflects the smoothed trace, not a single noisy frame. */
+  static float ema[SPECTRUM_DATA_SIZE];
+  int ema_w = 0;
+  int frames = 0;
+
+  if (rc == CLIENT_OK) {
     client_start(c);
     uint64_t seq = 0;
-    int got = 0;
-    for (int i = 0; i < 50 && !got; i++) { /* up to ~5s */
+    for (int i = 0; i < 120 && frames < 30; i++) { /* up to ~6s */
       if (client_latest(c, &f, &seq)) {
-        got = 1;
+        if (ema_w != f.width) {
+          for (int j = 0; j < f.width; j++) { ema[j] = (float)f.dbm[j] - 200.0f; }
+          ema_w = f.width;
+        } else {
+          for (int j = 0; j < f.width; j++) {
+            ema[j] += 0.35f * ((float)f.dbm[j] - 200.0f - ema[j]);
+          }
+        }
+        frames++;
       } else {
-        usleep(100000);
+        usleep(50000);
       }
     }
-    if (!got) {
+    if (frames == 0) {
       status = "connected — no spectrum";
     } else {
-      fprintf(stderr, "frame: width=%d vfoA=%lld Hz S=%.1f dBm\n",
-              f.width, (long long)f.vfo_a_freq, f.s_dbm);
+      fprintf(stderr, "averaged %d frames: width=%d vfoA=%lld Hz S=%.1f dBm\n",
+              frames, f.width, (long long)f.vfo_a_freq, f.s_dbm);
     }
   }
 
   cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, W, H);
   cairo_t *cr = cairo_create(surf);
-  panadapter_draw(cr, W, H, status ? NULL : &f, status);
+  panadapter_draw(cr, W, H, status ? NULL : &f, (frames > 0) ? ema : NULL, status);
   cairo_surface_flush(surf);
   cairo_status_t st = cairo_surface_write_to_png(surf, out);
   fprintf(stderr, "wrote %s (%s)\n", out, cairo_status_to_string(st));

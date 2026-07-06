@@ -26,8 +26,15 @@ typedef struct {
   uint64_t    last_seq;
   int         have_frame;
 
+  /* Time-averaged dBm (exponential moving average) for a smoother trace. */
+  float       ema[SPECTRUM_DATA_SIZE];
+  int         ema_w;
+
   GtkWidget  *area;
 } App;
+
+/* Blend `factor` of the new frame into the running average (0..1). */
+#define EMA_FACTOR 0.35f
 
 static void draw_cb(GtkDrawingArea *area, cairo_t *cr, int w, int h, gpointer data) {
   (void)area;
@@ -36,14 +43,15 @@ static void draw_cb(GtkDrawingArea *area, cairo_t *cr, int w, int h, gpointer da
   if (!app->connected) {
     char msg[128];
     snprintf(msg, sizeof(msg), "Not connected: %s", client_strerror(app->conn_err));
-    panadapter_draw(cr, w, h, NULL, msg);
+    panadapter_draw(cr, w, h, NULL, NULL, msg);
     return;
   }
   if (!app->have_frame) {
-    panadapter_draw(cr, w, h, NULL, "Connected — waiting for spectrum…");
+    panadapter_draw(cr, w, h, NULL, NULL, "Connected — waiting for spectrum…");
     return;
   }
-  panadapter_draw(cr, w, h, &app->frame, NULL);
+  const float *smoothed = (app->ema_w == app->frame.width) ? app->ema : NULL;
+  panadapter_draw(cr, w, h, &app->frame, smoothed, NULL);
 }
 
 static gboolean tick_cb(GtkWidget *widget, GdkFrameClock *clock, gpointer data) {
@@ -51,6 +59,18 @@ static gboolean tick_cb(GtkWidget *widget, GdkFrameClock *clock, gpointer data) 
   App *app = (App *)data;
   if (app->connected &&
       client_latest(app->client, &app->frame, &app->last_seq)) {
+    /* Update the time-average; reinitialise if the width changed. */
+    const ClientFrame *f = &app->frame;
+    if (app->ema_w != f->width) {
+      for (int i = 0; i < f->width; i++) {
+        app->ema[i] = (float)f->dbm[i] - 200.0f;
+      }
+      app->ema_w = f->width;
+    } else {
+      for (int i = 0; i < f->width; i++) {
+        app->ema[i] += EMA_FACTOR * ((float)f->dbm[i] - 200.0f - app->ema[i]);
+      }
+    }
     app->have_frame = 1;
     gtk_widget_queue_draw(widget);
   }

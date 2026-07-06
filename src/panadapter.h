@@ -19,9 +19,13 @@
  * Render into `cr` at size w x h.
  *   - if `status` is non-NULL, the background + grid are drawn with that message
  *     centred (used for "connecting" / error states) and `frame` is ignored;
- *   - otherwise `frame` (non-NULL) is drawn as a spectrum with readouts.
+ *   - otherwise `frame` (non-NULL) supplies the readouts (freq, S-meter) and,
+ *     when `dbm` is NULL, the trace as well (raw 1 dB steps). If `dbm` is
+ *     non-NULL it is a `frame->width`-long array of smoothed dBm values (e.g.
+ *     time-averaged) used for the trace, giving a finer sub-dB curve.
  */
 void panadapter_draw(cairo_t *cr, int w, int h,
-                     const ClientFrame *frame, const char *status);
+                     const ClientFrame *frame, const float *dbm,
+                     const char *status);
 
 #endif /* PIHPSDR_CLIENT_PANADAPTER_H */
