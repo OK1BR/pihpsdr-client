@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -25,11 +26,24 @@ struct Client {
   int  tcp;
   int  udp;
 
-  GThread *thread;
-  GMutex   lock;        /* protects `latest` */
+  GThread *rx_thread_h;   /* UDP: spectrum + keepalive ping */
+  GThread *tcp_thread_h;  /* TCP: drains echoes/pongs so the server never blocks */
+  GMutex   lock;          /* protects `latest`            */
+  GMutex   send_lock;     /* serialises TCP sends across threads */
   ClientFrame latest;
   volatile gboolean running;
 };
+
+/* All TCP sends funnel through here (multiple threads send). */
+static int client_send(Client *c, const void *buf, int n) {
+  if (c->tcp < 0) {
+    return -1;
+  }
+  g_mutex_lock(&c->send_lock);
+  int rc = tp_send_all(c->tcp, buf, n);
+  g_mutex_unlock(&c->send_lock);
+  return rc;
+}
 
 Client *client_new(const char *host, int port, const char *pwd) {
   Client *c = g_new0(Client, 1);
@@ -39,6 +53,7 @@ Client *client_new(const char *host, int port, const char *pwd) {
   c->tcp = -1;
   c->udp = -1;
   g_mutex_init(&c->lock);
+  g_mutex_init(&c->send_lock);
   return c;
 }
 
@@ -128,7 +143,7 @@ static int ingest_until_start(Client *c) {
   }
 }
 
-static int cl_send_rxspectrum(int fd, int id, int state) {
+static int cl_send_rxspectrum(Client *c, int id, int state) {
   HEADER h;
   SYNC(h.sync);
   h.data_type = to_16(CMD_RX_SPECTRUM);
@@ -136,7 +151,19 @@ static int cl_send_rxspectrum(int fd, int id, int state) {
   h.b2 = state;
   h.s1 = 0;
   h.s2 = 0;
-  return tp_send_all(fd, &h, sizeof(h));
+  return client_send(c, &h, sizeof(h));
+}
+
+/* Keepalive. The server drops a client that is silent on TCP for 30 s. */
+static void cl_send_ping(Client *c) {
+  HEADER h;
+  SYNC(h.sync);
+  h.data_type = to_16(CMD_PING);
+  h.b1 = 0;
+  h.b2 = 0;
+  h.s1 = 0;
+  h.s2 = 0;
+  client_send(c, &h, sizeof(h));
 }
 
 int client_connect(Client *c) {
@@ -175,7 +202,7 @@ int client_connect(Client *c) {
     return rc;
   }
 
-  cl_send_rxspectrum(c->tcp, 0, 1);
+  cl_send_rxspectrum(c, 0, 1);
   return CLIENT_OK;
 }
 
@@ -209,23 +236,34 @@ static int decode_spectrum(const uint8_t *buf, int len, ClientFrame *f) {
   return 0;
 }
 
+static long mono_ms(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+}
+
+/* UDP: decode spectrum into the latest frame; also send a ~1s keepalive ping. */
 static gpointer rx_thread(gpointer data) {
   Client *c = (Client *)data;
   static uint8_t dg[sizeof(SPECTRUM_DATA) + 64];
   ClientFrame tmp;
   memset(&tmp, 0, sizeof(tmp));
 
-  /* 1s recv timeout so the loop periodically re-checks `running`. */
+  /* 1s recv timeout so we still ping / re-check `running` when UDP is quiet. */
   struct timeval tv = { 1, 0 };
   setsockopt(c->udp, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
+  long last_ping = mono_ms();
+
   while (c->running) {
-    ssize_t n = recv(c->udp, dg, sizeof(dg), 0);
-    if (n < 0) {
-      continue; /* timeout: re-check running */
+    if (mono_ms() - last_ping >= 1000) {
+      cl_send_ping(c);
+      last_ping = mono_ms();
     }
+
+    ssize_t n = recv(c->udp, dg, sizeof(dg), 0);
     if (n < (int)sizeof(HEADER)) {
-      continue;
+      continue; /* timeout or too short */
     }
     HEADER *h = (HEADER *)dg;
     if (memcmp(h->sync, SYNCBYTES, 4) != 0) {
@@ -246,9 +284,39 @@ static gpointer rx_thread(gpointer data) {
   return NULL;
 }
 
+/*
+ * TCP: continuously drain the stream the server sends us (command echoes,
+ * CMD_PONG replies to our pings, INFO_* updates). If we did not, our receive
+ * buffer would fill and the server's send_tcp would back up. We consume each
+ * message by its type-implied size; state updates beyond the spectrum stream
+ * are not needed yet, so payloads are discarded.
+ */
+static gpointer tcp_thread(gpointer data) {
+  Client *c = (Client *)data;
+  static uint8_t payload[8192];
+
+  while (c->running) {
+    HEADER h;
+    if (read_header(c->tcp, &h) < 0) {
+      c->running = FALSE; /* server closed / error */
+      break;
+    }
+    uint16_t type = from_16(h.data_type);
+    int psize = cs_tcp_payload_size(type);
+    if (psize > 0) {
+      if (psize > (int)sizeof(payload) || tp_recv_all(c->tcp, payload, psize) < 0) {
+        c->running = FALSE;
+        break;
+      }
+    }
+  }
+  return NULL;
+}
+
 void client_start(Client *c) {
   c->running = TRUE;
-  c->thread = g_thread_new("pihpsdr-rx", rx_thread, c);
+  c->tcp_thread_h = g_thread_new("pihpsdr-tcp", tcp_thread, c);
+  c->rx_thread_h  = g_thread_new("pihpsdr-rx",  rx_thread,  c);
 }
 
 int client_latest(Client *c, ClientFrame *out, uint64_t *last_seq) {
@@ -264,9 +332,6 @@ int client_latest(Client *c, ClientFrame *out, uint64_t *last_seq) {
 }
 
 void client_vfo_move(Client *c, int id, long long hz) {
-  if (c->tcp < 0) {
-    return;
-  }
   U64_COMMAND cmd;
   SYNC(cmd.header.sync);
   cmd.header.data_type = to_16(CMD_MOVE);
@@ -275,7 +340,7 @@ void client_vfo_move(Client *c, int id, long long hz) {
   cmd.header.s1 = 0;
   cmd.header.s2 = 0;
   cmd.u64 = to_64(hz);
-  tp_send_all(c->tcp, &cmd, sizeof(cmd));
+  client_send(c, &cmd, sizeof(cmd));
 }
 
 void client_stop(Client *c) {
@@ -283,12 +348,24 @@ void client_stop(Client *c) {
     return;
   }
   c->running = FALSE;
-  if (c->thread) {
-    g_thread_join(c->thread);
-    c->thread = NULL;
-  }
+
+  /* Best-effort "stop streaming" before we tear the socket down. */
   if (c->tcp >= 0) {
-    cl_send_rxspectrum(c->tcp, 0, 0);
+    cl_send_rxspectrum(c, 0, 0);
+    /* Unblock the TCP reader thread's blocking recv(). */
+    shutdown(c->tcp, SHUT_RDWR);
+  }
+
+  if (c->tcp_thread_h) {
+    g_thread_join(c->tcp_thread_h);
+    c->tcp_thread_h = NULL;
+  }
+  if (c->rx_thread_h) {
+    g_thread_join(c->rx_thread_h);
+    c->rx_thread_h = NULL;
+  }
+
+  if (c->tcp >= 0) {
     close(c->tcp);
     c->tcp = -1;
   }
@@ -304,6 +381,7 @@ void client_free(Client *c) {
   }
   client_stop(c);
   g_mutex_clear(&c->lock);
+  g_mutex_clear(&c->send_lock);
   g_free(c);
 }
 
