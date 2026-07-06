@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "panadapter.h"
+#include "waterfall.h"   /* shared amplitude palette */
 
 #include <stdio.h>
 #include <string.h>
@@ -94,8 +95,13 @@ static double column_value(const float *dbm, int n, int x, int w) {
   return dbm_lerp(dbm, n, c0);
 }
 
-/* `dbm` is a length-n array of dBm values (already smoothed by the caller). */
-static void draw_spectrum(cairo_t *cr, const float *dbm, int n, int w, int h) {
+/*
+ * `dbm` is a length-n array of dBm values (already smoothed by the caller).
+ * `low`/`span` define the dBm->colour mapping shared with the waterfall, so the
+ * fill and trace go blue at the noise floor and red at strong peaks.
+ */
+static void draw_spectrum(cairo_t *cr, const float *dbm, int n, int w, int h,
+                          double low, double span) {
   if (n < 2) {
     return;
   }
@@ -109,27 +115,41 @@ static void draw_spectrum(cairo_t *cr, const float *dbm, int n, int w, int h) {
   cairo_line_to(cr, w, h);
   cairo_close_path(cr);
 
+  /* Vertical gradient coloured by amplitude (same palette as the waterfall):
+   * each y maps to a dBm, then to a palette colour. */
   cairo_pattern_t *grad = cairo_pattern_create_linear(0, 0, 0, h);
-  cairo_pattern_add_color_stop_rgba(grad, 0.0, 0.37, 0.84, 0.90, 0.35);
-  cairo_pattern_add_color_stop_rgba(grad, 1.0, 0.37, 0.84, 0.90, 0.02);
+  for (int s = 0; s <= 24; s++) {
+    double off = s / 24.0;
+    double d = PAN_HIGH - off * (PAN_HIGH - PAN_LOW);
+    double r, g, b;
+    waterfall_palette_rgb((d - low) / span, &r, &g, &b);
+    cairo_pattern_add_color_stop_rgba(grad, off, r, g, b, 0.55);
+  }
   cairo_set_source(cr, grad);
   cairo_fill(cr);
   cairo_pattern_destroy(grad);
 
-  /* Bright trace on top. */
-  cairo_new_path(cr);
-  for (int x = 0; x < w; x++) {
-    double y = dbm_to_y(column_value(dbm, n, x, w), h);
-    if (x == 0) {
-      cairo_move_to(cr, x, y);
-    } else {
-      cairo_line_to(cr, x, y);
-    }
-  }
-  cairo_set_source_rgba(cr, 0.50, 0.92, 1.0, 0.98);
-  cairo_set_line_width(cr, 1.0);
+  /* Trace, coloured per segment by its own amplitude. */
+  cairo_set_line_width(cr, 1.2);
   cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
-  cairo_stroke(cr);
+  cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+  double pd = column_value(dbm, n, 0, w);
+  double py = dbm_to_y(pd, h);
+  for (int x = 1; x < w; x++) {
+    double d = column_value(dbm, n, x, w);
+    double y = dbm_to_y(d, h);
+    double r, g, b;
+    /* colour by the brighter of the two endpoints so peaks stay vivid */
+    double dc = (d > pd) ? d : pd;
+    waterfall_palette_rgb((dc - low) / span, &r, &g, &b);
+    /* lift toward white a touch so the line reads above the fill */
+    cairo_set_source_rgba(cr, 0.35 + 0.65 * r, 0.35 + 0.65 * g, 0.35 + 0.65 * b, 0.98);
+    cairo_move_to(cr, x - 1, py);
+    cairo_line_to(cr, x, y);
+    cairo_stroke(cr);
+    pd = d;
+    py = y;
+  }
 }
 
 static void draw_center_line(cairo_t *cr, int w, int h) {
@@ -181,6 +201,7 @@ static void draw_status(cairo_t *cr, const char *msg, int w, int h) {
 
 void panadapter_draw(cairo_t *cr, int w, int h,
                      const ClientFrame *frame, const float *dbm,
+                     double cmap_low, double cmap_span,
                      const char *status) {
   /* Background. */
   cairo_set_source_rgb(cr, 0.039, 0.055, 0.070);
@@ -203,7 +224,8 @@ void panadapter_draw(cairo_t *cr, int w, int h,
     vals = tmp;
   }
 
-  draw_spectrum(cr, vals, frame->width, w, h);
+  if (cmap_span < 1.0) cmap_span = 1.0;
+  draw_spectrum(cr, vals, frame->width, w, h, cmap_low, cmap_span);
   draw_center_line(cr, w, h);
   draw_readouts(cr, frame, w);
 }

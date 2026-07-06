@@ -27,4 +27,14 @@ void waterfall_push(Waterfall *wf, const uint8_t *dbm, int n);
 /* Blit the waterfall into the rectangle (x,y,w,h), scaled to fit. */
 void waterfall_draw(Waterfall *wf, cairo_t *cr, int x, int y, int w, int h);
 
+/*
+ * Shared amplitude palette, so the panadapter can colour its trace/fill with
+ * the same hues (noise = blue … peaks = red). `t` in [0,1], returns rgb [0,1].
+ */
+void waterfall_palette_rgb(double t, double *r, double *g, double *b);
+
+/* Current colour-map range in dBm: *low = tracked noise floor, *span = dB to
+ * the top of the palette. Lets the panadapter map dBm -> colour identically. */
+void waterfall_range(const Waterfall *wf, double *low, double *span);
+
 #endif /* PIHPSDR_CLIENT_WATERFALL_H */

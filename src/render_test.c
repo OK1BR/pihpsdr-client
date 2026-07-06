@@ -86,13 +86,15 @@ int main(int argc, char **argv) {
   cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, W, H);
   cairo_t *cr = cairo_create(surf);
   if (status) {
-    panadapter_draw(cr, W, H, NULL, NULL, status);
+    panadapter_draw(cr, W, H, NULL, NULL, 0, 1, status);
   } else {
+    double low, span;
+    waterfall_range(wf, &low, &span);
     int ph = H / 2;
     cairo_save(cr);
     cairo_rectangle(cr, 0, 0, W, ph);
     cairo_clip(cr);
-    panadapter_draw(cr, W, ph, &f, ema, NULL);
+    panadapter_draw(cr, W, ph, &f, ema, low, span, NULL);
     cairo_restore(cr);
     waterfall_draw(wf, cr, 0, ph, W, H - ph);
   }

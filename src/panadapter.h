@@ -23,9 +23,14 @@
  *     when `dbm` is NULL, the trace as well (raw 1 dB steps). If `dbm` is
  *     non-NULL it is a `frame->width`-long array of smoothed dBm values (e.g.
  *     time-averaged) used for the trace, giving a finer sub-dB curve.
+ *
+ * `cmap_low` / `cmap_span` set the dBm->colour mapping (noise floor and dB
+ * span) so the trace and its fill share the waterfall's hues — pass the values
+ * from waterfall_range().
  */
 void panadapter_draw(cairo_t *cr, int w, int h,
                      const ClientFrame *frame, const float *dbm,
+                     double cmap_low, double cmap_span,
                      const char *status);
 
 #endif /* PIHPSDR_CLIENT_PANADAPTER_H */

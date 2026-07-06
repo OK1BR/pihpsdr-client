@@ -27,10 +27,9 @@ struct Waterfall {
   int              auto_init;
 };
 
-/* Build a classic waterfall palette LUT: black-blue -> cyan -> green ->
- * yellow -> orange -> red as intensity rises. */
-static void build_lut(uint32_t *lut) {
-  /* stops: position 0..1 and R,G,B */
+/* Classic waterfall palette: black-blue -> cyan -> green -> yellow -> orange
+ * -> red as intensity rises. Shared with the panadapter. */
+void waterfall_palette_rgb(double t, double *r, double *g, double *b) {
   static const double stop[][4] = {
     {0.00,   0,   0,  12},
     {0.20,   0,  18, 110},
@@ -41,22 +40,33 @@ static void build_lut(uint32_t *lut) {
     {1.00, 255,  40,  30},
   };
   const int nstops = (int)(sizeof(stop) / sizeof(stop[0]));
-
-  for (int i = 0; i < 256; i++) {
-    double t = i / 255.0;
-    int s = 0;
-    while (s < nstops - 2 && t > stop[s + 1][0]) {
-      s++;
-    }
-    double t0 = stop[s][0], t1 = stop[s + 1][0];
-    double f = (t1 > t0) ? (t - t0) / (t1 - t0) : 0.0;
-    if (f < 0) f = 0;
-    if (f > 1) f = 1;
-    int r = (int)(stop[s][1] + f * (stop[s + 1][1] - stop[s][1]));
-    int g = (int)(stop[s][2] + f * (stop[s + 1][2] - stop[s][2]));
-    int b = (int)(stop[s][3] + f * (stop[s + 1][3] - stop[s][3]));
-    lut[i] = 0xFFu << 24 | (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b;
+  if (t < 0) t = 0;
+  if (t > 1) t = 1;
+  int s = 0;
+  while (s < nstops - 2 && t > stop[s + 1][0]) {
+    s++;
   }
+  double t0 = stop[s][0], t1 = stop[s + 1][0];
+  double f = (t1 > t0) ? (t - t0) / (t1 - t0) : 0.0;
+  if (f < 0) f = 0;
+  if (f > 1) f = 1;
+  *r = (stop[s][1] + f * (stop[s + 1][1] - stop[s][1])) / 255.0;
+  *g = (stop[s][2] + f * (stop[s + 1][2] - stop[s][2])) / 255.0;
+  *b = (stop[s][3] + f * (stop[s + 1][3] - stop[s][3])) / 255.0;
+}
+
+static void build_lut(uint32_t *lut) {
+  for (int i = 0; i < 256; i++) {
+    double r, g, b;
+    waterfall_palette_rgb(i / 255.0, &r, &g, &b);
+    lut[i] = 0xFFu << 24 | (uint32_t)(r * 255) << 16 |
+             (uint32_t)(g * 255) << 8 | (uint32_t)(b * 255);
+  }
+}
+
+void waterfall_range(const Waterfall *wf, double *low, double *span) {
+  *low = wf->auto_init ? wf->auto_low : -120.0;
+  *span = WF_SPAN;
 }
 
 Waterfall *waterfall_new(void) {

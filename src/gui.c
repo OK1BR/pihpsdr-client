@@ -49,23 +49,27 @@ static void draw_cb(GtkDrawingArea *area, cairo_t *cr, int w, int h, gpointer da
   if (!app->connected) {
     char msg[128];
     snprintf(msg, sizeof(msg), "Not connected: %s", client_strerror(app->conn_err));
-    panadapter_draw(cr, w, h, NULL, NULL, msg);
+    panadapter_draw(cr, w, h, NULL, NULL, 0, 1, msg);
     return;
   }
   if (!app->have_frame) {
-    panadapter_draw(cr, w, h, NULL, NULL, "Connected — waiting for spectrum…");
+    panadapter_draw(cr, w, h, NULL, NULL, 0, 1, "Connected — waiting for spectrum…");
     return;
   }
 
   int ph = (int)(h * PANADAPTER_FRACTION);
   if (ph < 1) ph = 1;
 
+  /* Share the waterfall's auto-ranged colour map with the panadapter. */
+  double low, span;
+  waterfall_range(app->wf, &low, &span);
+
   /* Panadapter (top). */
   const float *smoothed = (app->ema_w == app->frame.width) ? app->ema : NULL;
   cairo_save(cr);
   cairo_rectangle(cr, 0, 0, w, ph);
   cairo_clip(cr);
-  panadapter_draw(cr, w, ph, &app->frame, smoothed, NULL);
+  panadapter_draw(cr, w, ph, &app->frame, smoothed, low, span, NULL);
   cairo_restore(cr);
 
   /* Waterfall (bottom). */
