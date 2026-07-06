@@ -18,6 +18,7 @@
 
 #include "client.h"
 #include "panadapter.h"
+#include "waterfall.h"
 
 int main(int argc, char **argv) {
   const char *host = (argc > 1) ? argv[1] : "127.0.0.1";
@@ -30,8 +31,9 @@ int main(int argc, char **argv) {
   if (!out) {
     out = "panadapter.png";
   }
-  const int W = 1200, H = 480;
+  const int W = 1200, H = 660;
 
+  Waterfall *wf = waterfall_new();
   Client *c = client_new(host, port, pwd);
   const char *colenv = getenv("PIHPSDR_COLUMNS");
   if (colenv && atoi(colenv) > 0) {
@@ -67,6 +69,7 @@ int main(int argc, char **argv) {
             ema[j] += 0.35f * ((float)f.dbm[j] - 200.0f - ema[j]);
           }
         }
+        waterfall_push(wf, f.dbm, f.width);
         frames++;
       } else {
         usleep(50000);
@@ -82,7 +85,17 @@ int main(int argc, char **argv) {
 
   cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, W, H);
   cairo_t *cr = cairo_create(surf);
-  panadapter_draw(cr, W, H, status ? NULL : &f, (frames > 0) ? ema : NULL, status);
+  if (status) {
+    panadapter_draw(cr, W, H, NULL, NULL, status);
+  } else {
+    int ph = H / 2;
+    cairo_save(cr);
+    cairo_rectangle(cr, 0, 0, W, ph);
+    cairo_clip(cr);
+    panadapter_draw(cr, W, ph, &f, ema, NULL);
+    cairo_restore(cr);
+    waterfall_draw(wf, cr, 0, ph, W, H - ph);
+  }
   cairo_surface_flush(surf);
   cairo_status_t st = cairo_surface_write_to_png(surf, out);
   fprintf(stderr, "wrote %s (%s)\n", out, cairo_status_to_string(st));
@@ -90,5 +103,6 @@ int main(int argc, char **argv) {
   cairo_destroy(cr);
   cairo_surface_destroy(surf);
   client_free(c);
+  waterfall_free(wf);
   return (st == CAIRO_STATUS_SUCCESS) ? 0 : 1;
 }

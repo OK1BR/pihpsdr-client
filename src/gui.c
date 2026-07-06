@@ -16,6 +16,7 @@
 
 #include "client.h"
 #include "panadapter.h"
+#include "waterfall.h"
 
 typedef struct {
   Client     *client;
@@ -30,8 +31,12 @@ typedef struct {
   float       ema[SPECTRUM_DATA_SIZE];
   int         ema_w;
 
+  Waterfall  *wf;
   GtkWidget  *area;
 } App;
+
+/* Fraction of the height given to the panadapter (rest is waterfall). */
+#define PANADAPTER_FRACTION 0.5
 
 /* Blend `factor` of the new frame into the running average (0..1). */
 #define EMA_FACTOR 0.35f
@@ -50,8 +55,25 @@ static void draw_cb(GtkDrawingArea *area, cairo_t *cr, int w, int h, gpointer da
     panadapter_draw(cr, w, h, NULL, NULL, "Connected — waiting for spectrum…");
     return;
   }
+
+  int ph = (int)(h * PANADAPTER_FRACTION);
+  if (ph < 1) ph = 1;
+
+  /* Panadapter (top). */
   const float *smoothed = (app->ema_w == app->frame.width) ? app->ema : NULL;
-  panadapter_draw(cr, w, h, &app->frame, smoothed, NULL);
+  cairo_save(cr);
+  cairo_rectangle(cr, 0, 0, w, ph);
+  cairo_clip(cr);
+  panadapter_draw(cr, w, ph, &app->frame, smoothed, NULL);
+  cairo_restore(cr);
+
+  /* Waterfall (bottom). */
+  waterfall_draw(app->wf, cr, 0, ph, w, h - ph);
+
+  /* Divider. */
+  cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.55);
+  cairo_rectangle(cr, 0, ph - 1, w, 2);
+  cairo_fill(cr);
 }
 
 static gboolean tick_cb(GtkWidget *widget, GdkFrameClock *clock, gpointer data) {
@@ -71,6 +93,8 @@ static gboolean tick_cb(GtkWidget *widget, GdkFrameClock *clock, gpointer data) 
         app->ema[i] += EMA_FACTOR * ((float)f->dbm[i] - 200.0f - app->ema[i]);
       }
     }
+    /* Waterfall uses the raw per-frame data (crisp signal lines). */
+    waterfall_push(app->wf, f->dbm, f->width);
     app->have_frame = 1;
     gtk_widget_queue_draw(widget);
   }
@@ -82,7 +106,7 @@ static void on_activate(GtkApplication *gtkapp, gpointer data) {
 
   GtkWidget *win = gtk_application_window_new(gtkapp);
   gtk_window_set_title(GTK_WINDOW(win), "pihpsdr-client — panadapter");
-  gtk_window_set_default_size(GTK_WINDOW(win), 1200, 480);
+  gtk_window_set_default_size(GTK_WINDOW(win), 1200, 660);
 
   app->area = gtk_drawing_area_new();
   gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(app->area), draw_cb, app, NULL);
@@ -103,6 +127,7 @@ int main(int argc, char **argv) {
   App app;
   memset(&app, 0, sizeof(app));
   app.client = client_new(host, port, pwd);
+  app.wf = waterfall_new();
 
   /* Optional: request a wider panadapter (up to 4096) via CMD_SCREEN.
    * NB: reconfigures the shared server display; native width is restored on exit. */
@@ -130,5 +155,6 @@ int main(int argc, char **argv) {
 
   g_object_unref(gtkapp);
   client_free(app.client);
+  waterfall_free(app.wf);
   return status;
 }
