@@ -31,7 +31,7 @@ int main(int argc, char **argv) {
   if (!out) {
     out = "panadapter.png";
   }
-  const int W = 1200, H = 660;
+  const int W = 1300, H = 680;
 
   Waterfall *wf = waterfall_new();
   Client *c = client_new(host, port, pwd);

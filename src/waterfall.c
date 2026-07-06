@@ -124,7 +124,8 @@ void waterfall_draw(Waterfall *wf, cairo_t *cr, int x, int y, int w, int h) {
   cairo_translate(cr, x, y);
   cairo_scale(cr, (double)w / wf->cols, (double)h / WF_ROWS);
   cairo_set_source_surface(cr, wf->surf, 0, 0);
-  cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_BILINEAR);
+  /* NEAREST keeps signal streaks crisp (like piHPSDR) instead of blurring. */
+  cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_NEAREST);
   cairo_paint(cr);
   cairo_restore(cr);
 }

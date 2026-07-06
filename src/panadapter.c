@@ -126,8 +126,8 @@ static void draw_spectrum(cairo_t *cr, const float *dbm, int n, int w, int h) {
       cairo_line_to(cr, x, y);
     }
   }
-  cairo_set_source_rgba(cr, 0.45, 0.90, 0.98, 0.95);
-  cairo_set_line_width(cr, 1.3);
+  cairo_set_source_rgba(cr, 0.50, 0.92, 1.0, 0.98);
+  cairo_set_line_width(cr, 1.0);
   cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
   cairo_stroke(cr);
 }

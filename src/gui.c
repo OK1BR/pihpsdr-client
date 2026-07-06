@@ -38,8 +38,9 @@ typedef struct {
 /* Fraction of the height given to the panadapter (rest is waterfall). */
 #define PANADAPTER_FRACTION 0.5
 
-/* Blend `factor` of the new frame into the running average (0..1). */
-#define EMA_FACTOR 0.35f
+/* Blend `factor` of the new frame into the running average (0..1). Higher =
+ * snappier/sharper, lower = smoother. Kept light so the trace stays crisp. */
+#define EMA_FACTOR 0.55f
 
 static void draw_cb(GtkDrawingArea *area, cairo_t *cr, int w, int h, gpointer data) {
   (void)area;
@@ -106,7 +107,7 @@ static void on_activate(GtkApplication *gtkapp, gpointer data) {
 
   GtkWidget *win = gtk_application_window_new(gtkapp);
   gtk_window_set_title(GTK_WINDOW(win), "pihpsdr-client — panadapter");
-  gtk_window_set_default_size(GTK_WINDOW(win), 1200, 660);
+  gtk_window_set_default_size(GTK_WINDOW(win), 1300, 680);
 
   app->area = gtk_drawing_area_new();
   gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(app->area), draw_cb, app, NULL);
