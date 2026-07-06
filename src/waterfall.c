@@ -8,15 +8,23 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Colour-map range (dBm) and history depth (rows in the backing image). */
-#define WF_LOW   -140.0
-#define WF_HIGH   -50.0
-#define WF_ROWS   256
+/*
+ * The colour map is auto-ranged: the low end tracks the noise floor (a low
+ * percentile of each frame) and the top sits WF_SPAN dB above it. This keeps
+ * high contrast — dark noise, bright signals — regardless of band conditions,
+ * which is what makes the waterfall look crisp rather than a low-contrast wash.
+ */
+#define WF_ROWS       256
+#define WF_SPAN        42.0   /* dB from noise floor to the top of the palette */
+#define WF_NOISE_PCT   20     /* percentile used as the noise-floor estimate   */
+#define WF_LOW_SMOOTH  0.04   /* EMA factor for the tracked noise floor        */
 
 struct Waterfall {
   cairo_surface_t *surf;   /* ARGB32, cols x WF_ROWS; row 0 is newest */
   int              cols;
   uint32_t         lut[256];
+  double           auto_low;   /* tracked noise floor (dBm) */
+  int              auto_init;
 };
 
 /* Build a classic waterfall palette LUT: black-blue -> cyan -> green ->
@@ -94,6 +102,30 @@ void waterfall_push(Waterfall *wf, const uint8_t *dbm, int n) {
   }
   ensure_surface(wf, n);
 
+  /* Estimate the noise floor from this frame (WF_NOISE_PCT-th percentile) via
+   * a coarse histogram, then track it slowly so the mapping stays stable. */
+  int hist[140];
+  memset(hist, 0, sizeof(hist));
+  const double hlo = -160.0, hbin = 1.0; /* 1 dB bins over -160..-20 */
+  for (int x = 0; x < n; x++) {
+    int b = (int)(((double)dbm[x] - 200.0) - hlo);
+    if (b < 0) b = 0;
+    if (b > 139) b = 139;
+    hist[b]++;
+  }
+  int target = n * WF_NOISE_PCT / 100, cum = 0, pb = 0;
+  for (int b = 0; b < 140; b++) {
+    cum += hist[b];
+    if (cum >= target) { pb = b; break; }
+  }
+  double noise = hlo + pb + 0.5;
+  if (!wf->auto_init) {
+    wf->auto_low = noise;
+    wf->auto_init = 1;
+  } else {
+    wf->auto_low += WF_LOW_SMOOTH * (noise - wf->auto_low);
+  }
+
   cairo_surface_flush(wf->surf);
   uint8_t *base = cairo_image_surface_get_data(wf->surf);
   int stride = cairo_image_surface_get_stride(wf->surf); /* bytes */
@@ -102,10 +134,11 @@ void waterfall_push(Waterfall *wf, const uint8_t *dbm, int n) {
   memmove(base + stride, base, (size_t)stride * (WF_ROWS - 1));
 
   uint32_t *row = (uint32_t *)base;
-  const double scale = 255.0 / (WF_HIGH - WF_LOW);
+  const double low = wf->auto_low;
+  const double scale = 255.0 / WF_SPAN;
   for (int x = 0; x < n; x++) {
     double d = (double)dbm[x] - 200.0;
-    int idx = (int)((d - WF_LOW) * scale);
+    int idx = (int)((d - low) * scale);
     if (idx < 0) idx = 0;
     if (idx > 255) idx = 255;
     row[x] = wf->lut[idx];
