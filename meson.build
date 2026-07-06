@@ -36,3 +36,31 @@ executable('pihpsdr-spike',
   dependencies : common_deps,
   install : false,
 )
+
+# --- Milestone 2: GTK4 panadapter GUI ---------------------------------------
+executable('pihpsdr-client-gui',
+  [
+    'src/gui.c',
+    'src/panadapter.c',
+    'src/client.c',
+    'src/protocol.c',
+    'src/transport.c',
+  ],
+  include_directories : [vendor_inc, src_inc],
+  dependencies : common_deps,
+  install : false,
+)
+
+# Headless render check (writes a PNG of one real frame; no window).
+executable('pihpsdr-render-test',
+  [
+    'src/render_test.c',
+    'src/panadapter.c',
+    'src/client.c',
+    'src/protocol.c',
+    'src/transport.c',
+  ],
+  include_directories : [vendor_inc, src_inc],
+  dependencies : common_deps,
+  install : false,
+)
